@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Garage Sale Map</title>
+
+<!-- ======================================================================
+  HOW TO SET THIS UP (read me!)
+
+  1. Put your spreadsheet in Google Sheets (File > Import if it's currently
+     an .xlsx). Then: File > Share > Publish to web > choose the sheet/tab
+     > choose "Comma-separated values (.csv)" > Publish.
+     Copy the link it gives you.
+
+  2. Paste that link into SHEET_CSV_URL below, replacing the placeholder.
+
+  3. Your spreadsheet needs these column headers (case-insensitive, any
+     order): Address, City, State, Zip, Day, Time, Notes
+     (an optional "Garage or Yard" column is also read and shown if present)
+
+  4. Upload this file to free static hosting (see the chat instructions)
+     to get a public URL, then make a QR code for that URL.
+
+  That's it — every time you edit the spreadsheet, this page reflects the
+  change automatically (it refetches the data every few minutes, and also
+  on every page load).
+====================================================================== -->
+
+<style>
+  :root{
+    --ink:#1f2a24;
+    --paper:#faf7f1;
+    --line:#dcd4c4;
+    --accent:#c15b3c;
+    --accent-soft:#f0d9cf;
+    --muted:#7a7368;
+    --card:#ffffff;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    font-family:'Georgia','Times New Roman',serif;
+    background:var(--paper);
+    color:var(--ink);
+    display:flex;
+    flex-direction:column;
+  }
+  header{
+    padding:18px 20px 14px;
+    border-bottom:2px solid var(--ink);
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    flex-wrap:wrap;
+    gap:8px;
+  }
+  header h1{
+    margin:0;
+    font-size:1.5rem;
+    letter-spacing:0.02em;
+  }
+  header h1 .dot{color:var(--accent);}
+  #status{
+    font-family:'Helvetica Neue',Arial,sans-serif;
+    font-size:0.78rem;
+    color:var(--muted);
+    text-align:right;
+  }
+  #map{
+    flex:1;
+    min-height:420px;
+  }
+  #listWrap{
+    border-top:2px solid var(--ink);
+    max-height:34vh;
+    overflow-y:auto;
+    background:var(--card);
+  }
+  #list{
+    list-style:none;
+    margin:0;
+    padding:0;
+    font-family:'Helvetica Neue',Arial,sans-serif;
+  }
+  #list li{
+    padding:10px 20px;
+    border-bottom:1px solid var(--line);
+    cursor:pointer;
+    display:flex;
+    justify-content:space-between;
+    gap:12px;
+    align-items:center;
+  }
+  #list li:hover{background:var(--accent-soft);}
+  #list .addr{font-weight:600; font-size:0.92rem;}
+  #list .meta{font-size:0.8rem; color:var(--muted); text-align:right; white-space:nowrap;}
+  .leaflet-popup-content{font-family:'Helvetica Neue',Arial,sans-serif; font-size:0.85rem; line-height:1.4;}
+  .leaflet-popup-content b{font-family:Georgia,serif; font-size:0.95rem;}
+  #empty, #err{
+    padding:40px 20px;
+    text-align:center;
+    font-family:'Helvetica Neue',Arial,sans-serif;
+    color:var(--muted);
+    display:none;
+  }
+  #err{color:var(--accent);}
+
+  .legend{
+    background:var(--card);
+    padding:10px 14px;
+    border-radius:6px;
+    border:1px solid var(--line);
+    font-family:'Helvetica Neue',Arial,sans-serif;
+    font-size:0.78rem;
+    box-shadow:0 1px 4px rgba(0,0,0,0.15);
+    line-height:1.6;
+  }
+  .legend-row{display:flex; align-items:center; gap:7px; white-space:nowrap;}
+  .legend-swatch{
+    width:12px; height:12px; border-radius:50%;
+    border:1.5px solid rgba(0,0,0,0.35);
+    flex-shrink:0;
+  }
+  #list .swatch{
+    width:11px; height:11px; border-radius:50%;
+    border:1.5px solid rgba(0,0,0,0.3);
+    display:inline-block;
+    margin-right:8px;
+    flex-shrink:0;
+  }
+  #list .addrRow{display:flex; align-items:center;}
+</style>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+</head>
+<body>
+
+<header>
+  <h1>Garage Sale Map<span class="dot">.</span></h1>
+  <div id="status">Loading latest listings…</div>
+</header>
+
+<div id="map"></div>
+<div id="empty">No garage sales listed yet. Check back soon!</div>
+<div id="err"></div>
+
+<div id="listWrap">
+  <ul id="list"></ul>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script>
+// =========================================================================
+// 1. PASTE YOUR PUBLISHED GOOGLE SHEET CSV LINK HERE
+// =========================================================================
+const SHEET_CSV_URL = "PASTE_YOUR_PUBLISHED_CSV_LINK_HERE";
+
+// How often to recheck the spreadsheet for changes, in milliseconds.
+const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
+
+// Example-row text used in the template, so we can auto-skip it.
+const EXAMPLE_ADDRESS = "123 maple st";
+
+// =========================================================================
+
+const map = L.map('map');
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors',
+  maxZoom: 19
+}).addTo(map);
+map.setView([39.5, -98.35], 4); // fallback US view until data loads
+
+let markers = [];
+const geocodeCache = JSON.parse(localStorage.getItem('geocodeCache') || '{}');
+
+// Color palette assigned to each distinct "Day" value as it's encountered
+// (e.g. "Friday", "Saturday", "Sat & Sun" each get their own color).
+const DAY_PALETTE = ['#c15b3c', '#3c7ec1', '#4a9d5f', '#c19a3c', '#8a5ec1', '#c13c8a', '#3cadad', '#8a6a3c'];
+const dayColorMap = {};
+function colorForDay(day) {
+  const key = (day || 'Unknown').trim();
+  if (!dayColorMap[key]) {
+    dayColorMap[key] = DAY_PALETTE[Object.keys(dayColorMap).length % DAY_PALETTE.length];
+  }
+  return dayColorMap[key];
+}
+
+let legendControl = null;
+function renderLegend() {
+  if (legendControl) { map.removeControl(legendControl); }
+  legendControl = L.control({ position: 'topright' });
+  legendControl.onAdd = function () {
+    const div = L.DomUtil.create('div', 'legend');
+    const rows = Object.entries(dayColorMap).map(([day, color]) =>
+      `<div class="legend-row"><span class="legend-swatch" style="background:${color}"></span>${day}</div>`
+    ).join('');
+    div.innerHTML = `<b>Sale Day</b><br>${rows}`;
+    return div;
+  };
+  legendControl.addTo(map);
+}
+
+function setStatus(text) {
+  document.getElementById('status').textContent = text;
+}
+
+function saveCache() {
+  localStorage.setItem('geocodeCache', JSON.stringify(geocodeCache));
+}
+
+// Polite client-side geocoding via OpenStreetMap's free Nominatim service.
+// Respects Nominatim's usage policy: max ~1 request/second, results cached
+// in the browser so a returning visitor re-geocodes nothing.
+async function geocode(fullAddress) {
+  if (geocodeCache[fullAddress]) return geocodeCache[fullAddress];
+  const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(fullAddress)}`;
+  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+  const data = await res.json();
+  if (data && data[0]) {
+    const coords = { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+    geocodeCache[fullAddress] = coords;
+    saveCache();
+    return coords;
+  }
+  return null;
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function getField(row, ...names) {
+  const keys = Object.keys(row);
+  for (const name of names) {
+    const key = keys.find(k => k.trim().toLowerCase() === name.toLowerCase());
+    if (key && row[key] !== undefined) return String(row[key]).trim();
+  }
+  return "";
+}
+
+async function loadAndRender() {
+  try {
+    setStatus("Checking spreadsheet…");
+    const res = await fetch(SHEET_CSV_URL + (SHEET_CSV_URL.includes('?') ? '&' : '?') + 'cachebust=' + Date.now());
+    if (!res.ok) throw new Error("Couldn't fetch the spreadsheet (HTTP " + res.status + ")");
+    const csvText = await res.text();
+    const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: true });
+    const rows = parsed.data;
+
+    // Clear old markers/list
+    markers.forEach(m => map.removeLayer(m));
+    markers = [];
+    document.getElementById('list').innerHTML = "";
+
+    const bounds = [];
+    let count = 0;
+
+    for (const row of rows) {
+      const address = getField(row, 'address');
+      if (!address) continue;
+      if (address.toLowerCase().startsWith(EXAMPLE_ADDRESS)) continue;
+      if (address.toLowerCase().startsWith('how to fill') || address.toLowerCase().startsWith('-')) continue;
+
+      const city = getField(row, 'city');
+      const state = getField(row, 'state');
+      const zip = getField(row, 'zip', 'zip code');
+      const day = getField(row, 'day');
+      const time = getField(row, 'time');
+      const notes = getField(row, 'notes');
+      const type = getField(row, 'garage or yard', 'type');
+
+      const fullAddress = [address, city, state, zip].filter(Boolean).join(', ');
+      setStatus(`Locating listings… (${count + 1}/${rows.length})`);
+
+      const coords = await geocode(fullAddress);
+      await sleep(1000); // stay polite to the free geocoding service
+
+      if (!coords) continue;
+
+      const dotColor = colorForDay(day);
+      const marker = L.circleMarker([coords.lat, coords.lon], {
+        radius: 10,
+        color: '#1f2a24',
+        weight: 1.5,
+        fillColor: dotColor,
+        fillOpacity: 0.9
+      }).addTo(map);
+
+      // Anonymous popup: no street address shown, just general area + day/time.
+      const areaLine = [city, state].filter(Boolean).join(', ');
+      const popupHtml = `
+        <b style="color:${dotColor}">${day || 'Day TBD'}</b>${time ? ' · ' + time : ''}<br>
+        ${areaLine ? areaLine + '<br>' : ''}
+        ${type ? type + '<br>' : ''}
+        ${notes ? notes : ''}
+      `;
+      marker.bindPopup(popupHtml);
+      markers.push(marker);
+      bounds.push([coords.lat, coords.lon]);
+      count++;
+
+      // Anonymous list entry: color swatch + day/time only, no address text.
+      const li = document.createElement('li');
+      li.innerHTML = `
+        <span class="addrRow"><span class="swatch" style="background:${dotColor}"></span>
+        <span class="addr">${day || 'Day TBD'}</span></span>
+        <span class="meta">${time || ''}</span>
+      `;
+      li.addEventListener('click', () => {
+        map.setView([coords.lat, coords.lon], 16);
+        marker.openPopup();
+      });
+      document.getElementById('list').appendChild(li);
+    }
+
+    renderLegend();
+
+    document.getElementById('empty').style.display = count === 0 ? 'block' : 'none';
+    document.getElementById('err').style.display = 'none';
+
+    if (bounds.length > 0) {
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+    }
+
+    setStatus(`${count} sale${count === 1 ? '' : 's'} · updated ${new Date().toLocaleTimeString()}`);
+  } catch (e) {
+    console.error(e);
+    document.getElementById('err').textContent = "Couldn't load the map data: " + e.message;
+    document.getElementById('err').style.display = 'block';
+    setStatus("Update failed — showing last known data");
+  }
+}
+
+if (SHEET_CSV_URL.includes('PASTE_YOUR')) {
+  setStatus("Setup needed");
+  document.getElementById('err').textContent =
+    "Open this file and paste your published Google Sheet CSV link into SHEET_CSV_URL near the top of the <script> section.";
+  document.getElementById('err').style.display = 'block';
+  map.setView([39.5, -98.35], 4);
+} else {
+  loadAndRender();
+  setInterval(loadAndRender, REFRESH_MS);
+}
+</script>
+
+</body>
+</html>
