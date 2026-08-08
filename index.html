@@ -179,16 +179,47 @@ map.setView([39.5, -98.35], 4); // fallback US view until data loads
 let markers = [];
 const geocodeCache = JSON.parse(localStorage.getItem('geocodeCache') || '{}');
 
-// Color palette assigned to each distinct "Day" value as it's encountered
-// (e.g. "Friday", "Saturday", "Sat & Sun" each get their own color).
-const DAY_PALETTE = ['#c15b3c', '#3c7ec1', '#4a9d5f', '#c19a3c', '#8a5ec1', '#c13c8a', '#3cadad', '#8a6a3c'];
+// Color palette assigned to each distinct day-combination as it's encountered.
+// Common combos get fixed, meaningful colors (e.g. all three days = purple);
+// anything unrecognized falls back to the next color in FALLBACK_PALETTE.
+const PRESET_DAY_COLORS = {
+  'Friday': '#c19a3c',
+  'Saturday': '#3c7ec1',
+  'Sunday': '#3cadad',
+  'Friday & Saturday': '#4a9d5f',
+  'Saturday & Sunday': '#c15b3c',
+  'Friday & Sunday': '#c13c8a',
+  'Friday, Saturday & Sunday': '#8a5ec1' // all days = purple
+};
+const FALLBACK_PALETTE = ['#6a4a8a', '#a35c1f', '#2f8f8f', '#b0463c', '#5c7a3c', '#3c5ca3', '#a33c74'];
 const dayColorMap = {};
-function colorForDay(day) {
-  const key = (day || 'Unknown').trim();
-  if (!dayColorMap[key]) {
-    dayColorMap[key] = DAY_PALETTE[Object.keys(dayColorMap).length % DAY_PALETTE.length];
+
+// Reads "Fri", "Friday", "Sat & Sun", "All weekend", etc. and normalizes it
+// to a canonical combo label like "Saturday & Sunday" so color + legend stay
+// consistent regardless of exactly how the spreadsheet phrases it.
+function normalizeDayCombo(dayStr) {
+  const s = (dayStr || '').toLowerCase();
+  let fri = /fri/.test(s);
+  let sat = /sat/.test(s);
+  let sun = /sun/.test(s);
+  if (/all|every ?day|weekend/.test(s) && !(fri || sat || sun)) { fri = sat = sun = true; }
+  if (/all/.test(s) && (fri || sat || sun)) { fri = sat = sun = true; }
+  const days = [];
+  if (fri) days.push('Friday');
+  if (sat) days.push('Saturday');
+  if (sun) days.push('Sunday');
+  if (days.length === 0) return (dayStr || 'Day TBD').trim();
+  if (days.length === 1) return days[0];
+  return days.slice(0, -1).join(', ') + ' & ' + days[days.length - 1];
+}
+
+function colorForDay(dayRaw) {
+  const canonical = normalizeDayCombo(dayRaw);
+  if (!dayColorMap[canonical]) {
+    dayColorMap[canonical] = PRESET_DAY_COLORS[canonical]
+      || FALLBACK_PALETTE[Object.keys(dayColorMap).length % FALLBACK_PALETTE.length];
   }
-  return dayColorMap[key];
+  return dayColorMap[canonical];
 }
 
 let legendControl = null;
