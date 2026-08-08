@@ -106,6 +106,31 @@
     display:none;
   }
   #err{color:var(--accent);}
+
+  .legend{
+    background:var(--card);
+    padding:10px 14px;
+    border-radius:6px;
+    border:1px solid var(--line);
+    font-family:'Helvetica Neue',Arial,sans-serif;
+    font-size:0.78rem;
+    box-shadow:0 1px 4px rgba(0,0,0,0.15);
+    line-height:1.6;
+  }
+  .legend-row{display:flex; align-items:center; gap:7px; white-space:nowrap;}
+  .legend-swatch{
+    width:12px; height:12px; border-radius:50%;
+    border:1.5px solid rgba(0,0,0,0.35);
+    flex-shrink:0;
+  }
+  #list .swatch{
+    width:11px; height:11px; border-radius:50%;
+    border:1.5px solid rgba(0,0,0,0.3);
+    display:inline-block;
+    margin-right:8px;
+    flex-shrink:0;
+  }
+  #list .addrRow{display:flex; align-items:center;}
 </style>
 
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
@@ -129,9 +154,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 <script>
 // =========================================================================
-// 1. https://docs.google.com/spreadsheets/d/e/2PACX-1vR3QZPW7AU_BsNWpaPxUBFBBpjGb_dUL15vBxnus_GNP3Smm68viAwNpGCyQCH5GJKqL9yuatF67zy9/pub?gid=1445769654&single=true&output=csv
+// 1. PASTE YOUR PUBLISHED GOOGLE SHEET CSV LINK HERE
 // =========================================================================
-const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR3QZPW7AU_BsNWpaPxUBFBBpjGb_dUL15vBxnus_GNP3Smm68viAwNpGCyQCH5GJKqL9yuatF67zy9/pub?gid=1445769654&single=true&output=csv";
+const SHEET_CSV_URL = "PASTE_YOUR_PUBLISHED_CSV_LINK_HERE";
 
 // How often to recheck the spreadsheet for changes, in milliseconds.
 const REFRESH_MS = 5 * 60 * 1000; // 5 minutes
@@ -150,6 +175,33 @@ map.setView([39.5, -98.35], 4); // fallback US view until data loads
 
 let markers = [];
 const geocodeCache = JSON.parse(localStorage.getItem('geocodeCache') || '{}');
+
+// Color palette assigned to each distinct "Day" value as it's encountered
+// (e.g. "Friday", "Saturday", "Sat & Sun" each get their own color).
+const DAY_PALETTE = ['#c15b3c', '#3c7ec1', '#4a9d5f', '#c19a3c', '#8a5ec1', '#c13c8a', '#3cadad', '#8a6a3c'];
+const dayColorMap = {};
+function colorForDay(day) {
+  const key = (day || 'Unknown').trim();
+  if (!dayColorMap[key]) {
+    dayColorMap[key] = DAY_PALETTE[Object.keys(dayColorMap).length % DAY_PALETTE.length];
+  }
+  return dayColorMap[key];
+}
+
+let legendControl = null;
+function renderLegend() {
+  if (legendControl) { map.removeControl(legendControl); }
+  legendControl = L.control({ position: 'topright' });
+  legendControl.onAdd = function () {
+    const div = L.DomUtil.create('div', 'legend');
+    const rows = Object.entries(dayColorMap).map(([day, color]) =>
+      `<div class="legend-row"><span class="legend-swatch" style="background:${color}"></span>${day}</div>`
+    ).join('');
+    div.innerHTML = `<b>Sale Day</b><br>${rows}`;
+    return div;
+  };
+  legendControl.addTo(map);
+}
 
 function setStatus(text) {
   document.getElementById('status').textContent = text;
@@ -226,11 +278,20 @@ async function loadAndRender() {
 
       if (!coords) continue;
 
-      const marker = L.marker([coords.lat, coords.lon]).addTo(map);
+      const dotColor = colorForDay(day);
+      const marker = L.circleMarker([coords.lat, coords.lon], {
+        radius: 10,
+        color: '#1f2a24',
+        weight: 1.5,
+        fillColor: dotColor,
+        fillOpacity: 0.9
+      }).addTo(map);
+
+      // Anonymous popup: no street address shown, just general area + day/time.
+      const areaLine = [city, state].filter(Boolean).join(', ');
       const popupHtml = `
-        <b>${address}</b><br>
-        ${city ? city + (state ? ', ' + state : '') + (zip ? ' ' + zip : '') + '<br>' : ''}
-        ${day ? '<b>' + day + '</b>' : ''}${time ? ' · ' + time : ''}<br>
+        <b style="color:${dotColor}">${day || 'Day TBD'}</b>${time ? ' · ' + time : ''}<br>
+        ${areaLine ? areaLine + '<br>' : ''}
         ${type ? type + '<br>' : ''}
         ${notes ? notes : ''}
       `;
@@ -239,14 +300,21 @@ async function loadAndRender() {
       bounds.push([coords.lat, coords.lon]);
       count++;
 
+      // Anonymous list entry: color swatch + day/time only, no address text.
       const li = document.createElement('li');
-      li.innerHTML = `<span class="addr">${address}</span><span class="meta">${day || ''}${time ? ' · ' + time : ''}</span>`;
+      li.innerHTML = `
+        <span class="addrRow"><span class="swatch" style="background:${dotColor}"></span>
+        <span class="addr">${day || 'Day TBD'}</span></span>
+        <span class="meta">${time || ''}</span>
+      `;
       li.addEventListener('click', () => {
         map.setView([coords.lat, coords.lon], 16);
         marker.openPopup();
       });
       document.getElementById('list').appendChild(li);
     }
+
+    renderLegend();
 
     document.getElementById('empty').style.display = count === 0 ? 'block' : 'none';
     document.getElementById('err').style.display = 'none';
