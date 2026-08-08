@@ -70,8 +70,10 @@
   }
   #map{
     flex:1;
-    min-height:420px;
+    min-height:100vh;
   }
+  header{ display:none; }
+  #listWrap{ display:none; }
   #listWrap{
     border-top:2px solid var(--ink);
     max-height:34vh;
@@ -167,9 +169,10 @@ const EXAMPLE_ADDRESS = "123 maple st";
 // =========================================================================
 
 const map = L.map('map');
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '&copy; OpenStreetMap contributors',
-  maxZoom: 19
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+  maxZoom: 19,
+  subdomains: 'abcd'
 }).addTo(map);
 map.setView([39.5, -98.35], 4); // fallback US view until data loads
 
@@ -197,7 +200,7 @@ function renderLegend() {
     const rows = Object.entries(dayColorMap).map(([day, color]) =>
       `<div class="legend-row"><span class="legend-swatch" style="background:${color}"></span>${day}</div>`
     ).join('');
-    div.innerHTML = `<b>Sale Day</b><br>${rows}`;
+    div.innerHTML = rows;
     return div;
   };
   legendControl.addTo(map);
